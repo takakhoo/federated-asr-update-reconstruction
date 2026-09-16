@@ -1,7 +1,25 @@
 #!/usr/bin/env python3
-import os, csv, numpy as np, soundfile as sf
+import argparse
+import csv
+import os
 
-root = "/scratch2/f004h1v/flower-ASR/flower/baselines/fedwav2vec2"
+parser = argparse.ArgumentParser(description="Create a synthetic Flower ASR smoke-test client")
+parser.add_argument(
+    "--baseline-root",
+    default=os.environ.get("FEDWAV2VEC_ROOT"),
+    help="Path to the fedwav2vec2 baseline root (or set FEDWAV2VEC_ROOT)",
+)
+args = parser.parse_args()
+if not args.baseline_root:
+    parser.error("provide --baseline-root or set FEDWAV2VEC_ROOT")
+
+try:
+    import numpy as np
+    import soundfile as sf
+except ImportError as exc:
+    raise RuntimeError("Install requirements.txt before creating test audio.") from exc
+
+root = os.path.abspath(args.baseline_root)
 datadir = os.path.join(root, "data", "client_0")
 os.makedirs(datadir, exist_ok=True)
 
@@ -22,5 +40,3 @@ for split in ["ted_train.csv","ted_dev.csv","ted_test.csv"]:
         w.writeheader(); w.writerows(rows)
 
 print("Tiny client created under", datadir)
-
-

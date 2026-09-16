@@ -1,78 +1,149 @@
-# flower-ASR Workspace (lisplab-1)
+# Federated ASR Update Capture and Reconstruction
 
-## Overview
+Companion tooling for capturing client updates from Flower's `fedwav2vec2` research baseline and analyzing what final-layer gradients reveal about speech features.
 
-### Goal
-Reproduce DS1-style gradient inversion for modern ASR in a federated-learning setting using Flower’s `fedwav2vec2` baseline. We will:
-1) capture per-client **model deltas** and **final-CTC-layer gradients** during a federated round,
-2) reconstruct a **synthetic input** whose gradients match, and
-3) visualize its **mel-spectrogram** side-by-side with the original to measure leakage (mel-MSE/PSNR) while tracking utility (WER).
+This repository is intentionally small. It does not fork or vendor the full Flower/SpeechBrain baseline; instead, it provides the experiment scripts that sit beside a compatible checkout.
 
-### What Flower is
-Flower coordinates federated rounds: the server sends weights, clients train locally, and return updates. We use it mainly to **produce the same signals a server would see** (client deltas and grads) without centralizing raw audio.
+## Research workflow
 
-### Model & layer we target
-Baseline model: **wav2vec2.0** encoder + SpeechBrain **CTC head**.  
-**Target layer for inversion:** the **final CTC projection** (`modules.ctc_lin.weight`), mirroring DS1 which targeted the last FC layer.
-
-### What we reconstruct
-Given a saved gradient \(G^\* = \nabla_W \mathcal{L}(x^\*, y^\*)\) at the final CTC layer weights, we optimize a synthetic input \(z\) so that its induced gradient matches \(G^\*\). We then plot mel-spectrograms of \(z\) (recon) vs the original.
-
-### Experiments (quick)
-- **E1 Norm sensitivity (DS1 link):** freeze vs train LayerNorm; compare WER & leakage.
-- **E2 Adapters vs full fine-tuning:** trade off comms size & leakage vs WER.
-- **E3 Local epochs:** 1/2/4 local steps; effect on leakage for similar WER.
-
-### Minimal workflow
-1. Run a **tiny round** (1 client, 1 epoch) with hooks → writes:
-   - `updates/client_{cid}_round_{r}_delta.pt`
-   - `updates/grads_client_{cid}_round_{r}.pt`
-2. Run `scripts/reconstruct_from_grads.py --grads <file>` → images in `viz/`.
-3. Iterate E1–E3 with small overrides; log results in this README.
-
-## Quick Commands
-
-**Inventory (lists key files and symbols)**
-```bash
-bash scripts/list_baseline_inventory.sh
+```text
+Flower server sends global ASR weights
+                 |
+                 v
+client performs local CTC training
+                 |
+                 v
+capture model delta + final CTC gradients
+                 |
+                 v
+least-squares feature estimate or waveform optimization
+                 |
+                 v
+visual diagnostics for privacy leakage
 ```
 
-**Tiny federated run (1 round, 1 client, hooks on)**
+The target signal is the gradient of the final CTC projection (`ctc_lin.weight`). Two reconstruction modes are included:
+
+- `ls`: estimate hidden features from saved weight and logit gradients with a pseudoinverse; and
+- `waveform`: optimize a synthetic waveform through the SpeechBrain model so its final-layer gradient matches the captured update.
+
+## Repository status
+
+| Surface | Status | Notes |
+|---|---|---|
+| Reconstruction source | Syntax-checked | `scripts/reconstruct_from_grads.py` |
+| Synthetic client generator | Portable | Accepts `--baseline-root` or `FEDWAV2VEC_ROOT` |
+| Flower runner | Portable wrapper | No hard-coded cluster paths or destructive temporary clone step |
+| Full baseline | External dependency | Requires a compatible Flower `fedwav2vec2` checkout with the gradient hooks applied |
+| End-to-end result set | Not committed | No benchmark table is claimed in this repository |
+
+Earlier versions contained absolute `/scratch2/...` paths, a duplicated shell script body, and synthetic heartbeat files. Those artifacts have been removed so the repository reflects actual research work rather than machine-specific state or artificial activity.
+
+## Files
+
+```text
+scripts/
+├── list_baseline_inventory.sh   inspect the expected Flower baseline surface
+├── make_tiny_client.py          generate a deterministic two-second smoke-test client
+├── run_tiny_with_hooks.sh       launch one CPU Flower round with capture enabled
+├── reconstruct_from_grads.py    least-squares and waveform reconstruction modes
+└── reconstruct_ctc_features.py  compatibility entry point
+```
+
+## Prerequisites
+
+1. A compatible checkout of Flower's `fedwav2vec2` baseline.
+2. Local modifications that save the client model delta and the final CTC-layer gradient/logit gradient.
+3. Python 3.10+ and the packages in `requirements.txt`.
+
+Create the environment:
+
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+Point the scripts at the baseline root - the directory that contains the `fedwav2vec2` Python package:
+
+```bash
+export FEDWAV2VEC_ROOT=/absolute/path/to/flower/baselines/fedwav2vec2
+```
+
+## Inspect and smoke-test the baseline
+
+```bash
+bash scripts/list_baseline_inventory.sh
+python scripts/make_tiny_client.py
 bash scripts/run_tiny_with_hooks.sh
 ```
 
-**Reconstruction from saved grads**
-```bash
-python scripts/reconstruct_from_grads.py \
-  --grads flower/baselines/fedwav2vec2/updates/grads_client_0_round_0.pt \
-  --steps 500 --lr 0.05
+The runner creates a deterministic two-second sine-wave client, mirrors its CSVs into the minimal server split, and starts one CPU round. A correctly patched baseline should write update artifacts under:
+
+```text
+$FEDWAV2VEC_ROOT/updates/
+├── client_0_round_0_delta.pt
+└── grads_client_0_round_0.pt
 ```
 
-## Changelog
-- 2025-10-1: Added Overview & Quick Commands sections.
-- 2025-10-5: Created workspace at , cloned , installed deps, verified CUDA/Torch.
-- 2025-10-8: Edited  to add:
-  - Hook A: save client pre/post state deltas under .
-  - Hook B: dump grads of final CTC linear () for one minibatch.
-- 2025-10-10: Added Hydra flags in : , .
-- 2025-10-15: (You) are now adding runner scripts, reconstruction scaffold, and verification steps.
+The tiny client is a plumbing check, not a meaningful privacy benchmark.
 
-## Paths
-- Baseline root: 
-- Updates (client deltas & grads): 
-- Quick scripts (top-level): 
-- Visualizations: 
+## Reconstruct hidden features
 
-=== Workspace tree (depth 2) ===
+The least-squares mode expects a PyTorch blob containing:
 
-## Scripts
-- scripts/run_tiny_with_hooks.sh: prepares TED-LIUM mapping and runs 1 round with hooks enabled; writes updates under baseline .
-- scripts/list_baseline_inventory.sh: prints a baseline tree and key grep hits (ctc_lin, backward, hooks block).
+- `dW`: final CTC weight gradient with shape `(vocabulary, hidden)`; and
+- `dlogits`: logit gradient with shape `(batch, time, vocabulary)`.
 
-## Reconstruction quickstart
-After running a tiny round with hooks, pick a grads file in , e.g.:
+```bash
+python scripts/reconstruct_from_grads.py \
+  --grads "$FEDWAV2VEC_ROOT/updates/grads_client_0_round_0.pt" \
+  --mode ls \
+  --out_dir viz/ls
+```
 
+## Reconstruct a waveform
 
+Waveform mode additionally needs the SpeechBrain model configuration and saved target fields:
 
-Images will be saved in .
+```bash
+python scripts/reconstruct_from_grads.py \
+  --grads "$FEDWAV2VEC_ROOT/updates/grads_client_0_round_0.pt" \
+  --mode waveform \
+  --sb_config "$FEDWAV2VEC_ROOT/fedwav2vec2/conf/sb_config/w2v2.yaml" \
+  --steps 500 \
+  --lr 0.05 \
+  --out_dir viz/waveform
+```
+
+The saved blob must also contain `W`, optional `b`, `targets`, and `target_lens`. If `dlogits` is present, `--lambda_dlogits` can add a logit-gradient alignment term.
+
+## Verification
+
+Checks that do not require Flower or model downloads:
+
+```bash
+python -m compileall -q scripts
+bash -n scripts/*.sh
+python scripts/reconstruct_from_grads.py --help
+python scripts/make_tiny_client.py --help
+```
+
+The help commands work before loading the heavyweight reconstruction dependencies or accessing the external baseline.
+
+## Limitations
+
+- The repository does not contain the patched Flower baseline, so the update-capture hooks cannot be independently audited here.
+- Least-squares hidden-feature recovery is not equivalent to recovering intelligible audio.
+- Waveform optimization is compute-intensive and sensitive to model/checkpoint compatibility.
+- The synthetic smoke-test client is not evidence of real-world leakage.
+- No aggregate privacy or WER result is claimed without a committed evaluation set.
+
+## Responsible research
+
+Use these scripts only on models and data you are authorized to test. Gradient artifacts can contain sensitive information even when raw speech never leaves a client.
+
+## License
+
+No repository-wide license has been granted. Flower, SpeechBrain, and any external baseline code retain their respective licenses.

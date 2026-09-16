@@ -1,13 +1,27 @@
 #!/usr/bin/env python3
-import argparse, os, sys, torch
-import numpy as np
-import matplotlib.pyplot as plt
-import torch.nn.functional as F
+from __future__ import annotations
 
-try:
-    from hyperpyyaml import load_hyperpyyaml
-except Exception:
-    load_hyperpyyaml = None
+import argparse
+import os
+
+torch = None
+np = None
+plt = None
+F = None
+
+
+def _load_core_dependencies():
+    global torch, np, plt, F
+    try:
+        import torch as _torch
+        import numpy as _np
+        import matplotlib.pyplot as _plt
+        import torch.nn.functional as _F
+    except ImportError as exc:
+        raise RuntimeError(
+            "Missing reconstruction dependencies. Install requirements.txt first."
+        ) from exc
+    torch, np, plt, F = _torch, _np, _plt, _F
 
 
 def tv_2d(x: torch.Tensor) -> torch.Tensor:
@@ -57,8 +71,12 @@ def run_ls_mode(blob_path: str, out_dir: str):
 
 
 def build_sb_modules(sb_yaml: str, device: torch.device):
-    if load_hyperpyyaml is None:
-        raise RuntimeError("hyperpyyaml not available; cannot build SpeechBrain modules")
+    try:
+        from hyperpyyaml import load_hyperpyyaml
+    except ImportError as exc:
+        raise RuntimeError(
+            "hyperpyyaml is required for waveform mode; install requirements.txt."
+        ) from exc
     with open(sb_yaml) as fin:
         params = load_hyperpyyaml(fin)
     modules = params["modules"]
@@ -148,18 +166,22 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--grads", required=True, help="Path to saved grads blob (.pt)")
     ap.add_argument("--mode", choices=["ls", "waveform"], default="ls")
-    ap.add_argument("--sb_config", default="/scratch2/f004h1v/flower-ASR/flower/baselines/fedwav2vec2/fedwav2vec2/conf/sb_config/w2v2.yaml")
+    ap.add_argument("--sb_config", default=None, help="SpeechBrain YAML; required for waveform mode")
     ap.add_argument("--steps", type=int, default=500)
     ap.add_argument("--lr", type=float, default=0.05)
     ap.add_argument("--save_every", type=int, default=50)
-    ap.add_argument("--out_dir", default="/scratch2/f004h1v/flower-ASR/viz")
+    ap.add_argument("--out_dir", default="viz")
     ap.add_argument("--wav_seconds", type=float, default=4.0)
     ap.add_argument("--lambda_dlogits", type=float, default=0.0)
     args = ap.parse_args()
 
+    _load_core_dependencies()
+
     if args.mode == "ls":
         run_ls_mode(args.grads, args.out_dir)
     else:
+        if not args.sb_config:
+            ap.error("--sb_config is required when --mode waveform")
         run_wave_mode(args.grads, args.sb_config, args.steps, args.lr, args.out_dir, args.wav_seconds, args.lambda_dlogits)
 
 
