@@ -1,6 +1,11 @@
 _temp/
 *.pt
 *.png
+!results/**/*.png
+!results/ls/synthetic-grads.pt
+__pycache__/
+.pytest_cache/
+.venv/
 
 # Exclude huge pretrained checkpoints
 flower/baselines/fedwav2vec2/docs/pretrained_wav2vec2/

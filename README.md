@@ -1,5 +1,53 @@
 # Federated ASR Update Capture and Reconstruction
 
+## Run the standalone identifiability experiment
+
+```bash
+python3.13 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-ls.txt
+MPLBACKEND=Agg python -m pytest tests -q
+OPENBLAS_NUM_THREADS=1 python reproduce_ls.py
+MPLBACKEND=Agg python scripts/reconstruct_from_grads.py \
+  --grads results/ls/synthetic-grads.pt --mode ls --out_dir results/ls/cli
+```
+
+![Feature identifiability comparison](results/ls/identifiability.png)
+
+This CPU experiment uses only generated arrays, no real clients, speech,
+external models, or Flower installation. It tests `G.T @ H = dW` in three
+regimes, with [full numerical results](results/ls/metrics.json):
+
+| Synthetic regime | Gradient residual | Relative hidden-feature error |
+|---|---:|---:|
+| 8 frames, full column rank | 5.4e-16 | 8.1e-16 |
+| 32 frames, rank 12 | 9.5e-16 | **0.768** |
+| Ill-conditioned, noisy | 0.000275 | **3018** |
+| Same noise, ridge 1e-4 | 0.00483 | 0.853 |
+
+The long case has 20 unobserved directions: matching the gradients almost
+perfectly does not recover the original features. Ridge limits noise
+amplification in the ill-conditioned case but introduces bias; it is not
+evidence of intelligible speech recovery.
+
+**Threat-model boundary:** this calculation requires per-frame `dlogits` in
+addition to `dW`. Standard FedAvg sends aggregated model updates, not these
+internal gradients. It is an instrumented-client diagnostic, not a demonstration
+that ordinary server-visible updates alone reveal audio.
+
+The CLI now preserves batch/frame positions (zero-gradient rows are not silently
+removed), writes both plots without overwriting one, saves actual reconstructed
+arrays, and reports rank, nullity, singular values and residuals. The old `hbar`
+formula is correctly labeled a **constant-feature least-squares fit**, not the
+true average feature. Six tests cover those properties and the real CLI path.
+Only trusted, tensor-only PyTorch artifacts are loaded with `weights_only=True`.
+
+Waveform mode remains an **unverified integration prototype**. In particular,
+second derivatives through the installed CTC and SpeechBrain encoder must be
+validated before claiming that optimization runs; ordinary CTC loss success is
+not sufficient. No full Flower capture or waveform reconstruction is claimed by
+the standalone experiment.
+
 Companion tooling for capturing client updates from Flower's `fedwav2vec2` research baseline and analyzing what final-layer gradients reveal about speech features.
 
 This repository is intentionally small. It does not fork or vendor the full Flower/SpeechBrain baseline; instead, it provides the experiment scripts that sit beside a compatible checkout.
@@ -35,7 +83,8 @@ The target signal is the gradient of the final CTC projection (`ctc_lin.weight`)
 | Synthetic client generator | Portable | Accepts `--baseline-root` or `FEDWAV2VEC_ROOT` |
 | Flower runner | Portable wrapper | No hard-coded cluster paths or destructive temporary clone step |
 | Full baseline | External dependency | Requires a compatible Flower `fedwav2vec2` checkout with the gradient hooks applied |
-| End-to-end result set | Not committed | No benchmark table is claimed in this repository |
+| Standalone LS diagnostic | Reproduced | Synthetic fixtures, six tests, plots, numeric arrays and hosted CI |
+| Full Flower/ASR result set | Not committed | Requires external hooks/model/data; not reproduced here |
 
 Earlier versions contained absolute `/scratch2/...` paths, a duplicated shell script body, and synthetic heartbeat files. Those artifacts have been removed so the repository reflects actual research work rather than machine-specific state or artificial activity.
 

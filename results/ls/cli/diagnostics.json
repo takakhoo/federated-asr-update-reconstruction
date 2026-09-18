@@ -1,0 +1,24 @@
+{
+  "frames": 8,
+  "vocabulary": 13,
+  "hidden_size": 6,
+  "rank": 8,
+  "nullity": 0,
+  "ridge": 0.0,
+  "rtol": 1e-10,
+  "relative_gradient_residual": 5.392784719208289e-16,
+  "mean_identifiable": true,
+  "mean_unobserved_component_norm": 3.304545775848116e-16,
+  "zero_gradient_rows": [],
+  "singular_values": [
+    5.264385154294529,
+    4.2911961100183005,
+    3.309807490245773,
+    2.729652423568832,
+    2.6294350399666415,
+    1.6302445552951228,
+    1.2408271087458353,
+    1.0456470796131057
+  ],
+  "interpretation": "minimum-norm/ridge estimate; constant-feature fit is NOT the true frame average"
+}

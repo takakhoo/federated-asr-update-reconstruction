@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import os
+import json
+from pathlib import Path
 
 torch = None
 np = None
@@ -28,7 +30,7 @@ def tv_2d(x: torch.Tensor) -> torch.Tensor:
     return (x[:, :, 1:] - x[:, :, :-1]).abs().mean() + (x[:, 1:, :] - x[:, :-1, :]).abs().mean()
 
 
-def save_img(arr: np.ndarray, step: int, out_dir: str, title: str):
+def save_img(arr: np.ndarray, step: int, out_dir: str, title: str, filename=None):
     os.makedirs(out_dir, exist_ok=True)
     vmin, vmax = np.percentile(arr, 1), np.percentile(arr, 99)
     disp = np.clip((arr - vmin) / (vmax - vmin + 1e-8), 0, 1)
@@ -36,38 +38,24 @@ def save_img(arr: np.ndarray, step: int, out_dir: str, title: str):
     plt.imshow(disp, aspect="auto", origin="lower")
     plt.title(f"{title} step {step}")
     plt.tight_layout()
-    out = os.path.join(out_dir, f"recon_step_{step:04d}.png")
+    out = os.path.join(out_dir, filename or f"recon_step_{step:04d}.png")
     plt.savefig(out, dpi=150)
     plt.close()
 
 
-def run_ls_mode(blob_path: str, out_dir: str):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    saved = torch.load(blob_path, map_location="cpu")
-    dW = saved["dW"].to(device)  # (V, D)
-    dlogits = saved["dlogits"].to(device)  # (B, T, V) or similar
-
-    V, D = dW.shape
-    # Flatten time/batch into N
-    Glog = dlogits.reshape(-1, dlogits.shape[-1])  # (N, V)
-    # Optionally drop zero rows (padding)
-    nonzero_mask = (Glog.abs().sum(dim=1) > 0)
-    if nonzero_mask.any():
-        Glog = Glog[nonzero_mask]
-    # Compute per-frame feature estimates via least squares: H_hat = pinv(Glog^T) @ dW
-    pinv = torch.linalg.pinv(Glog.t())  # (N, V)
-    H_hat = pinv @ dW  # (N, D)
-    H_hat_np = H_hat.detach().cpu().numpy().T  # (D, N) for display
-    save_img(H_hat_np, step=0, out_dir=out_dir, title="H_hat (LS)")
-
-    # Also compute average feature hbar
-    sum_g = Glog.sum(dim=0)  # (V,)
-    denom = float((sum_g @ sum_g).detach().cpu().numpy()) + 1e-12
-    hbar = (sum_g.unsqueeze(0) @ dW).squeeze(0) / denom  # (D,)
-    # Visualize hbar as a 1xD heatmap
-    save_img(hbar.detach().cpu().numpy()[None, :], step=0, out_dir=out_dir, title="hbar (LS)")
-
-    print(f"LS mode done. Saved H_hat and hbar visuals to {out_dir}")
+def run_ls_mode(blob_path: str, out_dir: str, ridge=0.0, rtol=1e-10):
+    try:
+        from .least_squares import recover_features
+    except ImportError:
+        from least_squares import recover_features
+    saved = torch.load(blob_path, map_location="cpu", weights_only=True)
+    features, constant, report = recover_features(saved["dW"].detach().numpy(),
+        saved["dlogits"].detach().numpy(), ridge=ridge, rtol=rtol)
+    save_img(features.reshape(-1, features.shape[-1]).T, 0, out_dir, "Minimum-norm hidden features", "features.png")
+    save_img(constant[None, :], 0, out_dir, "Constant-feature fit (not the true average)", "constant-fit.png")
+    np.savez(Path(out_dir)/"reconstruction.npz", features=features, constant_feature_fit=constant)
+    (Path(out_dir)/"diagnostics.json").write_text(json.dumps(report, indent=2) + "\n")
+    print(json.dumps(report, indent=2))
 
 
 def build_sb_modules(sb_yaml: str, device: torch.device):
@@ -91,7 +79,7 @@ def build_sb_modules(sb_yaml: str, device: torch.device):
 
 def run_wave_mode(blob_path: str, sb_yaml: str, steps: int, lr: float, out_dir: str, wav_seconds: float, lambda_dlogits: float):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    saved = torch.load(blob_path, map_location="cpu")
+    saved = torch.load(blob_path, map_location="cpu", weights_only=True)
     dW_star = saved["dW"].to(device)  # (V, D)
     W = saved["W"].to(device)
     b = saved["b"].to(device) if saved.get("b") is not None else None
@@ -173,12 +161,14 @@ def main():
     ap.add_argument("--out_dir", default="viz")
     ap.add_argument("--wav_seconds", type=float, default=4.0)
     ap.add_argument("--lambda_dlogits", type=float, default=0.0)
+    ap.add_argument("--ridge", type=float, default=0.0, help="LS ridge penalty; changes bias/noise tradeoff")
+    ap.add_argument("--rtol", type=float, default=1e-10, help="Relative singular-value cutoff for LS")
     args = ap.parse_args()
 
     _load_core_dependencies()
 
     if args.mode == "ls":
-        run_ls_mode(args.grads, args.out_dir)
+        run_ls_mode(args.grads, args.out_dir, ridge=args.ridge, rtol=args.rtol)
     else:
         if not args.sb_config:
             ap.error("--sb_config is required when --mode waveform")

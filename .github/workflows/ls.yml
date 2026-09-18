@@ -1,0 +1,18 @@
+name: Reproduce feature identifiability
+on: [push, pull_request]
+jobs:
+  cpu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install -r requirements-ls.txt
+      - run: MPLBACKEND=Agg python -m pytest tests -q
+      - run: OPENBLAS_NUM_THREADS=1 python reproduce_ls.py
+      - run: MPLBACKEND=Agg python scripts/reconstruct_from_grads.py --grads results/ls/synthetic-grads.pt --mode ls --out_dir results/ls/cli
+      - uses: actions/upload-artifact@v4
+        with:
+          name: identifiability-results
+          path: results/ls
